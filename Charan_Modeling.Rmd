@@ -1,0 +1,187 @@
+---
+title: "Charan_Model"
+output: html_document
+date: "2023-12-03"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+library(tidyverse)
+library(caret)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(skimr)
+library(xgboost)
+
+```
+```{R}
+df = read.csv('CVD.csv')
+
+#  'Sex' to a factor
+df$Sex <- factor(df$Sex)
+
+df$General_Health <- factor(df$General_Health)
+
+df$Checkup <- factor(df$Checkup)
+
+#  'Age_Category' to a factor
+df$Age_Category <- factor(df$Age_Category)
+
+#  'Smoking_History' to a factor
+df$Smoking_History <- factor(df$Smoking_History)
+
+#  'Heart_Disease' to a factor
+df$Heart_Disease <- factor(df$Heart_Disease)
+
+#  'Skin_Cancer' to a factor
+df$Skin_Cancer <- factor(df$Skin_Cancer)
+
+#  'Other_Cancer' to a factor
+df$Other_Cancer <- factor(df$Other_Cancer)
+
+#  'Arthritis' to a factor
+df$Arthritis <- factor(df$Arthritis)
+
+#  'Depression' to a factor
+df$Depression <- factor(df$Depression)
+
+#  'Diabetes' to a factor
+df$Diabetes <- factor(df$Diabetes)
+
+#  'Diabetes' to a factor
+df$Exercise <- factor(df$Exercise)
+
+str(df)
+
+```
+```{R}
+
+# Selecting specific variables
+selected_vars <- c('Depression', 'Diabetes', 'Arthritis', 'Sex', 'Age_Category', 
+                   'Smoking_History', 'BMI', 'Green_Vegetables_Consumption', 
+                   'FriedPotato_Consumption', 'Heart_Disease')
+df_selected <- df[selected_vars]
+
+
+# Splitting data into training and testing sets
+set.seed(123)
+split <- createDataPartition(df_selected$Heart_Disease, p = 0.8, list = FALSE)
+trainData <- df_selected[split, ]
+testData <- df_selected[-split, ]
+
+```
+
+```{R}
+# Define fitControl for the training process
+fitControl <- trainControl(
+  method = "cv",                # Use cross-validation
+  number = 10,                  # Number of folds in cross-validation
+  classProbs = TRUE,            # Compute class probabilities, important for some models
+  summaryFunction = twoClassSummary, # Summary function for binary classification
+  savePredictions = "final"     # Save predictions for each model
+)
+# Naive Bayes model training with selected variables
+nbModel <- train(
+  Heart_Disease ~ ., 
+  data = trainData, 
+  method = "naive_bayes", 
+  trControl = fitControl
+)
+
+# Predictions and Evaluation
+nbPredictions <- predict(nbModel, newdata = testData)
+confusionMatrix(nbPredictions, testData$Heart_Disease)
+
+
+```
+
+```{R}
+
+library(caret)
+# Assuming df is your original dataframe
+
+# Apply one-hot encoding for XGBoost
+dummies <- dummyVars(" ~ .", data = df)
+df_xgb <- predict(dummies, newdata = df)
+df_xgb <- as.data.frame(df_xgb)
+
+# Ensure 'Heart_Disease' remains as numeric
+df_xgb$Heart_Disease <- as.numeric(df$Heart_Disease) - 1
+
+# Splitting data into training and testing sets for XGBoost
+split_xgb <- createDataPartition(df_xgb$Heart_Disease, p = 0.8, list = FALSE)
+trainData_xgb <- df_xgb[split_xgb, ]
+testData_xgb <- df_xgb[-split_xgb, ]
+
+# Prepare DMatrix for XGBoost
+dtrain <- xgb.DMatrix(data = as.matrix(trainData_xgb[-which(names(trainData_xgb) == "Heart_Disease")]), 
+                      label = trainData_xgb$Heart_Disease)
+dtest <- xgb.DMatrix(data = as.matrix(testData_xgb[-which(names(testData_xgb) == "Heart_Disease")]), 
+                     label = testData_xgb$Heart_Disease)
+
+
+
+
+# Calculate the ratio for the scale_pos_weight parameter
+# Assuming 'Heart_Disease' is your target variable and 1 represents the minority class
+negative_cases <- sum(trainData_xgb$Heart_Disease == 0)
+positive_cases <- sum(trainData_xgb$Heart_Disease == 1)
+
+# Avoid division by zero in case there are no positive cases
+if (positive_cases == 0) {
+  stop("No positive cases found in the training data.")
+}
+
+scale_pos_weight <- negative_cases / positive_cases
+
+# Now define your XGBoost parameters including scale_pos_weight
+params <- list(
+  objective = "binary:logistic",
+  scale_pos_weight = scale_pos_weight,
+  max_depth = 6,
+  min_child_weight = 1,
+  subsample = 0.8,
+  colsample_bytree = 0.8,
+  eta = 0.3
+)
+
+
+# Train the XGBoost model
+xgb_model <- xgb.train(
+  params = params,
+  data = dtrain,
+  nrounds = 100,
+  watchlist = list(eval = dtest, train = dtrain),
+  early_stopping_rounds = 10
+)
+
+# Predict on test data
+xgb_predictions <- predict(xgb_model, dtest)
+xgb_predicted_labels <- ifelse(xgb_predictions > 0.5, 1, 0)
+
+# Evaluate model performance
+confusionMatrix(factor(xgb_predicted_labels, levels = c(0, 1)), factor(as.numeric(testData$Heart_Disease) - 1, levels = c(0, 1)))
+
+
+
+```
+Interpretation:
+Class Imbalance Impact: The high prevalence rate (0.91915) suggests a highly imbalanced dataset. This imbalance is reflected in the high accuracy but low balanced accuracy, indicating the model is biased towards the majority class.
+
+Poor Specificity: The model struggles to correctly identify positive instances of heart disease, which is a critical issue for a medical diagnostic tool.
+
+High Sensitivity but Low Specificity: This indicates the model is excellent at identifying 'No Heart Disease' cases but not 'Heart Disease' cases.
+
+Kappa Statistic: The very low kappa score suggests that the agreement between the predicted and actual values is minimal, mostly due to chance.
+
+Positive Predictive Value and Negative Predictive Value: Both are low, indicating a high rate of false positives and false negatives.
